@@ -1,21 +1,21 @@
+import { autoReadStream, file2stream, Log } from '@webav/internal-utils';
 import mp4box, {
   MP4File,
   MP4Sample,
   SampleOpts,
   TrakBoxParser,
 } from '@webav/mp4box.js';
-import { autoReadStream, file2stream, Log } from '@webav/internal-utils';
+import { tmpfile, write } from 'opfs-tools';
 import {
-  extractPCM4AudioData,
+  concatPCMFragments,
   extractPCM4AudioBuffer,
+  extractPCM4AudioData,
   mixinPCM,
   ringSliceFloat32Array,
-  concatPCMFragments,
 } from '../av-utils';
 import { DEFAULT_AUDIO_CONF } from '../clips';
-import { SampleTransform } from './sample-transform';
 import { extractFileConfig } from './mp4box-utils';
-import { tmpfile, write } from 'opfs-tools';
+import { SampleTransform } from './sample-transform';
 
 function fixMP4BoxFileDuration(
   inMP4File: MP4File,
@@ -201,7 +201,6 @@ async function concatStreamsToMP4BoxFile(
             const trackId = type === 'video' ? vTrackId : aTrackId;
             const offsetDTS = type === 'video' ? vDTS : aDTS;
             const offsetCTS = type === 'video' ? vCTS : aCTS;
-
             samples.forEach((s) => {
               outfile.addSample(trackId, s.data, {
                 duration: s.duration,
@@ -223,12 +222,14 @@ async function concatStreamsToMP4BoxFile(
       });
     });
     if (lastVSamp != null) {
-      vDTS += lastVSamp.dts;
-      vCTS += lastVSamp.cts;
+      vDTS += lastVSamp.dts + lastVSamp.duration;
+      vCTS += lastVSamp.cts + lastVSamp.duration;
     }
-    if (lastASamp != null) {
-      aDTS += lastASamp.dts;
-      aCTS += lastASamp.cts;
+    if (lastASamp != null && lastVSamp != null) {
+      // Force audio timing to match video timing (converted to audio timescale)
+      const videoToAudioRatio = lastASamp.timescale / lastVSamp.timescale;
+      aDTS = Math.round(vDTS * videoToAudioRatio);
+      aCTS = Math.round(vCTS * videoToAudioRatio);
     }
   }
 }
